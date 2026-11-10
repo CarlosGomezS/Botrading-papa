@@ -7,6 +7,7 @@ const prueba = async (nom, base, auth) => { try { const r = await fetch(base + "
 const B = (a, b) => "Basic " + Buffer.from(a + ":" + b).toString("base64");
 for (const [env, base] of [["REAL (live)", "https://live.trading212.com/api/v0"], ["PRÁCTICA (demo)", "https://demo.trading212.com/api/v0"]]) {
   await prueba(`${env} · clave + secreto`, base, B(k, s));
+  await prueba(`${env} · SIN ESPACIOS`, base, B(k.replace(/\s+/g, ""), s.replace(/\s+/g, "")));
   await prueba(`${env} · clave y secreto CAMBIADOS de sitio`, base, B(s, k));
   await prueba(`${env} · solo la clave (formato antiguo)`, base, k);
   await new Promise((r) => setTimeout(r, 1500)); }
