@@ -1,0 +1,144 @@
+name: Ajustes de la nube
+
+# Guarda en el repositorio (ajustes.json) lo que elijas aquí o desde la web (pestaña Ajustes → «Aplicar en la nube»).
+# La prueba histórica diaria lo lee al empezar; la actualización diaria aplica además los parámetros del bot (comisión, riesgo, frenos…) antes de ejecutarse.
+on:
+  workflow_dispatch:
+    inputs:
+      bt_max:
+        description: "Prueba histórica: máximo de acciones (10-500), o los ajustes completos en JSON (lo rellena la web: min, max, excl, ini, acc, auto, sim)"
+        type: string
+        default: "300"
+      cfg:
+        description: "Parámetros del bot en JSON (lo rellena la web; déjalo en {} si lo lanzas a mano)"
+        type: string
+        default: "{}"
+      main:
+        description: "Método principal (clave interna; lo rellena la web; vacío = no cambiar)"
+        type: string
+        default: ""
+      mins:
+        description: "Tiempo máximo por actualización en minutos (2-60; vacío = no cambiar)"
+        type: string
+        default: ""
+      capital:
+        description: "Capital inicial en € (100-1000000; vacío = no cambiar). OJO: si cambia, el bot REINICIA todas las cuentas con ese capital (archiva antes una copia)"
+        type: string
+        default: ""
+      extra:
+        description: "Otros ajustes en JSON: mon, mc, nt (1/0) y fx (cambio €/$) (lo rellena la web; déjalo en {} si lo lanzas a mano)"
+        type: string
+        default: "{}"
+      recalcular:
+        description: "Recalcular la cartera ya hecha con la comisión de los parámetros (una sola vez: corrige comisión, efectivo, coste y resultados de las órdenes pasadas)"
+        type: choice
+        options: ["no", "si"]
+        default: "no"
+      avisos:
+        description: "Avisos en JSON: movil y correo (1 = enviar, 0 = no enviar; lo rellena la web; déjalo en {} si lo lanzas a mano)"
+        type: string
+        default: "{}"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ajustes
+  cancel-in-progress: false
+
+jobs:
+  guardar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Guardar ajustes.json
+        env:
+          BM: ${{ inputs.bt_max }}
+          CFGJ: ${{ inputs.cfg }}
+          MAIN: ${{ inputs.main }}
+          MINS: ${{ inputs.mins }}
+          AVJ: ${{ inputs.avisos }}
+          CAP: ${{ inputs.capital }}
+          EXJ: ${{ inputs.extra }}
+          RC: ${{ inputs.recalcular }}
+        run: |
+          node -e '
+          const fs = require("fs");
+          let a = {}; try { a = JSON.parse(fs.readFileSync("ajustes.json", "utf8")); } catch {}
+          // prueba histórica: un número (máximo de acciones) o un JSON con todos sus ajustes
+          const bt = Object.assign({}, a.bt || {});
+          const BMs = String(process.env.BM || "").trim();
+          let bm;
+          if (BMs.startsWith("{")) {
+            let j; try { j = JSON.parse(BMs); } catch { console.error("Ajustes de la prueba: JSON no válido"); process.exit(1); }
+            const BL = { min: [10, 500], max: [10, 500], ini: [1999, 2022], excl: [0, 40], acc: [0, 1], auto: [0, 1] };
+            for (const k of Object.keys(j)) {
+              if (k === "sim") {
+                if (!Array.isArray(j.sim) || j.sim.length > 30 || j.sim.some((x) => typeof x !== "string" || !/^[A-Za-z0-9_-]{1,20}$/.test(x))) { console.error("Lista de métodos para la ficticia no válida"); process.exit(1); }
+                bt.sim = [...new Set(j.sim)]; continue;
+              }
+              const v = Math.round(+j[k]);
+              if (!BL[k] || !Number.isFinite(v) || v < BL[k][0] || v > BL[k][1]) { console.error("Ajuste de la prueba rechazado: " + k + " = " + j[k]); process.exit(1); }
+              bt[k] = v;
+            }
+            if (bt.min != null && bt.max != null && bt.min > bt.max) bt.min = bt.max;
+            bm = bt.max != null ? bt.max : (+a.bt_max || 300);
+          } else {
+            bm = Math.round(+BMs);
+            if (!Number.isFinite(bm)) { console.error("El máximo debe ser un número"); process.exit(1); }
+            bm = Math.max(10, Math.min(500, bm)); bt.max = bm; if (bt.min != null && bt.min > bm) bt.min = bm;
+          }
+          // mismos rangos seguros que la app (LIM): lo que se salga se rechaza
+          const LIM = { slots: [1, 6], mrisk: [0.001, 0.03], dloss: [0.005, 0.1], ddstop: [0.02, 0.3], fee: [0, 5], slip: [0, 0.02], minpos: [10, 200], sweep: [0, 1] };
+          let inCfg = {}; try { inCfg = JSON.parse(process.env.CFGJ || "{}"); } catch { console.error("cfg no es JSON válido"); process.exit(1); }
+          const cfg = {}; for (const k of Object.keys(a.cfg || {})) if (LIM[k]) cfg[k] = a.cfg[k]; // se descartan ajustes antiguos que ya no existen
+          for (const k of Object.keys(inCfg)) {
+            const v = +inCfg[k];
+            if (!LIM[k] || !Number.isFinite(v) || v < LIM[k][0] || v > LIM[k][1]) { console.error("Parámetro rechazado: " + k + " = " + inCfg[k]); process.exit(1); }
+            cfg[k] = v;
+          }
+          const out = { bt_max: bm };
+          if (Object.keys(bt).length) out.bt = bt;
+          if (Object.keys(cfg).length) out.cfg = cfg;
+          // método principal: solo una clave interna (la app comprueba que exista)
+          const mainIn = (process.env.MAIN || "").trim();
+          if (mainIn) { if (!/^[A-Za-z0-9_-]{1,40}$/.test(mainIn)) { console.error("Método no válido: " + mainIn); process.exit(1); } out.main = mainIn; }
+          else if (a.main) out.main = a.main;
+          // tiempo máximo por actualización
+          const minsIn = (process.env.MINS || "").trim();
+          if (minsIn) { const mv = Math.round(+minsIn); if (!Number.isFinite(mv) || mv < 2 || mv > 60) { console.error("Tiempo máximo fuera de rango (2-60): " + minsIn); process.exit(1); } out.mins = mv; }
+          else if (a.mins) out.mins = a.mins;
+          // avisos: móvil y correo se pueden apagar (los errores siempre avisan)
+          let avIn = {}; try { avIn = JSON.parse(process.env.AVJ || "{}"); } catch { console.error("avisos no es JSON válido"); process.exit(1); }
+          const av = Object.assign({}, a.avisos || {});
+          for (const k of Object.keys(avIn)) {
+            const v = +avIn[k];
+            if (!["movil", "correo"].includes(k) || ![0, 1].includes(v)) { console.error("Aviso rechazado: " + k + " = " + avIn[k]); process.exit(1); }
+            av[k] = v;
+          }
+          if (Object.keys(av).length) out.avisos = av;
+          // capital inicial: el bot reinicia las cuentas la próxima vez que se ejecute si no coincide con el actual
+          const capIn = (process.env.CAP || "").trim();
+          if (capIn) { const cv = Math.round(+capIn); if (!Number.isFinite(cv) || cv < 100 || cv > 1000000) { console.error("Capital fuera de rango (100-1000000): " + capIn); process.exit(1); } out.capital = cv; }
+          else if (a.capital) out.capital = a.capital;
+          // otros: correo automático de la app (mon, mc), notificaciones (nt) y cambio €/$ (fx)
+          let exIn = {}; try { exIn = JSON.parse(process.env.EXJ || "{}"); } catch { console.error("extra no es JSON válido"); process.exit(1); }
+          const XL = { mon: [0, 1], mc: [0, 1], nt: [0, 1], fx: [0.3, 3] };
+          const ex = Object.assign({}, a.extra || {});
+          for (const k of Object.keys(exIn)) {
+            const v = +exIn[k];
+            if (!XL[k] || !Number.isFinite(v) || v < XL[k][0] || v > XL[k][1]) { console.error("Ajuste rechazado: " + k + " = " + exIn[k]); process.exit(1); }
+            ex[k] = v;
+          }
+          if (Object.keys(ex).length) out.extra = ex;
+          // recálculo de comisiones: un identificador nuevo en cada petición; el bot lo aplica una sola vez
+          if (process.env.RC === "si") out.recalc = { id: new Date().toISOString() };
+          else if (a.recalc) out.recalc = a.recalc;
+          fs.writeFileSync("ajustes.json", JSON.stringify(out, null, 2) + "\n");
+          '
+          cat ajustes.json
+          git config user.name "bot-trading"
+          git config user.email "bot-trading@users.noreply.github.com"
+          git add ajustes.json
+          if git diff --cached --quiet; then echo "Sin cambios"; else git commit -m "Ajustes de la nube actualizados" && git push; fi
