@@ -1,0 +1,26 @@
+{
+  "bt_max": 300,
+  "bt": {
+    "max": 300
+  },
+  "cfg": {
+    "fee": 0.15,
+    "slip": 0.0015,
+    "minpos": 50,
+    "slots": 3,
+    "mrisk": 0.005,
+    "dloss": 0.01,
+    "ddstop": 0.06,
+    "sweep": 0
+  },
+  "mins": 8,
+  "avisos": {
+    "movil": 1,
+    "correo": 0
+  },
+  "extra": {
+    "nt": 1,
+    "mon": 0,
+    "mc": 1
+  }
+}
