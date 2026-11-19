@@ -1,6 +1,7 @@
 // v1.0 · la tarjeta de arriba de Hyperliquid tiene que enseñar lo MISMO que el panel (el saldo en vivo si se tiene)
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { crea, declaracion } from "./etf-lab-carga.mjs";
 
 test("Hyperliquid · la tarjeta usa el saldo en vivo de la misma cartera; si no lo hay, el guardado por el bot", () => {
@@ -26,4 +27,16 @@ test("Hyperliquid · con Bitvavo u OKX en pantalla se refresca solo la cifra de 
 
 test("Hyperliquid · al cargar los datos se pide ya el saldo en vivo (sin esperar 10 s)", () => {
   assert.match(declaracion("bvRealLoad").txt || "", /finally\{MM\.bvBusy=false;[\s\S]*setTimeout\(\(\)=>\{try\{hlVivo\(\)\}catch\(e\)\{\}\},400\)/);
+});
+
+const HAY_BOT = existsSync(new URL("../runner/hl-real.mjs", import.meta.url));   // (la copia sin bot de Hyperliquid no lo tiene)
+test("Hyperliquid · la app calcula lo ingresado IGUAL que el bot (también los ingresos por traspaso)", { skip: !HAY_BOT }, async () => {
+  process.env.HL_WALLET ??= "0x" + "b".repeat(40);
+  const BOT = await import("../runner/hl-real.mjs"), { hlNeto } = crea(["hlUsdc", "hlNeto"]).__X, YO = "0x" + "b".repeat(40), O = "0x" + "c".repeat(40);
+  const L = (d) => ({ delta: d }), casos = [
+    [L({ type: "deposit", usdc: "57.995289" }), L({ type: "send", user: O, destination: YO, token: "USDC", amount: "54.38" })],
+    [L({ type: "deposit", usdc: "58" }), L({ type: "withdraw", usdc: "8" }), L({ type: "accountClassTransfer", usdc: "5", toPerp: true })],
+    [L({ type: "spotTransfer", user: O, destination: YO, token: "PURR", amount: "9", usdcValue: "9" }), L({ type: "internalTransfer", user: YO, destination: O, usdc: "3" }), L({ type: "subAccountTransfer", user: O, destination: YO, usdc: "4" })]];
+  for (const c of casos) assert.equal(hlNeto(c, YO), BOT.netoIngresado(c, YO));
+  assert.equal(Math.round(hlNeto(casos[0], YO) * 100) / 100, 112.38);
 });
